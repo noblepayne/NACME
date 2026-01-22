@@ -81,7 +81,7 @@ except Exception as e:
     sys.exit(1)
 
 # Runtime config cache (populated at startup)
-_RUNTIME_CONFIG: typing.Dict[str, str] = {}
+_RUNTIME_CONFIG: dict[str, str] = {}
 
 # === Structured logging ===
 structlog.configure(

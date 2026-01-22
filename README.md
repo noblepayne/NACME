@@ -67,4 +67,12 @@ Testing strategy uses end-to-end blackbox tests with some smoke tests.
 pytest -v     # run test suite
 ```
 
+## Contributing
+
+We prefer small, focused PRs that follow the existing patterns:
+- See `AGENTS.md` for detailed development guidelines
+- Check `docs/DEVLOG.md` for project context and decisions
+- End-to-end and integration tests preferred over unit tests
+- Maintain the existing code style and import patterns
+
 Core features are complete and tested for homelab deployments.

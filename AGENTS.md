@@ -24,11 +24,14 @@ The goal is consistent, high-quality contributions aligned with project structur
    - **Update docs/ARCHITECTURE.md** only when there is a meaningful design shift (rare).
 
 3. **Code Style & Quality**
-   - Follow PEP 8 + type hints everywhere possible.
-   - **Import Style**: Clojure-style namespaced imports only. No `from x import y` except in tests or tightly coupled APIs. Always maintain at least one level of namespacing. No `import *` allowed.
+   - Follow PEP 8. Use type hints where they help clarity, but avoid over-engineering.
+     - Pragmatic approach: `dict[str, str]` is often clearer than complex generics.
+     - Focus on readability and maintenance over strict typing dogma.
+   - **Import Style**: Clojure-style namespaced imports preferred for clarity.
      - Good: `import os.path`, `import collections.abc`, `import urllib.parse`
-     - Bad: `from os import path`, `from collections import abc`
-     - Exceptions: Tests, or when a library's API is super coupled (rare, case-by-case)
+     - Acceptable: `from x import y` for tests or tightly coupled APIs where readability wins.
+     - Never: `import *` 
+     - Always maintain at least one level of namespacing where practical.
    - Prefer plain SQL + aiosqlite (no ORM, no query builders).
    - Keep server single-file for now; refactor to modules only when it becomes painful (>800–1000 LOC).
    - Use structured logging (`structlog`) in server code.

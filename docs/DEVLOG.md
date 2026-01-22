@@ -251,3 +251,57 @@ MVP stays focused on IPv4 (v1 certs, typical /24 deployments) but algorithm is r
 Core is solid and robust. Ready for manual network testing and eventually deployment layer (README, systemd examples, container image).
 
 — OpenCode, 2026-01-22 PST (Seattle)
+
+### 2026-01-22 – Code Style Refinement & URL Handling Robustness
+
+**Summary**
+Updated code style guidance to be more pragmatic, fixed double-slash URL handling in client, and added comprehensive test coverage for URL edge cases. Maintains focus on readability over dogmatic constraints while ensuring robust URL construction.
+
+**Code Style Updates**
+Refined AGENTS.md guidance to be more pragmatic:
+- Type hints: "Use where they help clarity, but avoid over-engineering. `dict[str, str]` is often clearer than complex generics."
+- Simplified typing in server code: `typing.Dict[str, str]` → `dict[str, str]`
+- Relaxed import language: "Clojure-style preferred" instead of "only"
+- Added focus on "readability over strict typing dogma"
+- Emphasized pragmatic approach over prescriptive rules
+
+**URL Handling Fix**
+Fixed double-slash issue in client URL construction:
+- Problem: `f"{str(config.server_url).rstrip('/')}/add"` still problematic with edge cases
+- Solution: `urllib.parse.urljoin(str(config.server_url), "/add")` handles all URL formats correctly
+- Added `urllib.parse` import to client
+- Maintains backward compatibility with existing URL formats
+
+**Test Enhancement**
+Added comprehensive URL variant testing:
+- New test `test_url_handling_variants` in existing e2e test file
+- Tests: no slash, single slash, double slash, with path, with path+slash
+- Reuses existing test infrastructure (server_process, api_key fixtures)
+- All URL formats now resolve correctly to `/add` endpoint
+- Both original e2e and new URL tests pass
+
+**Testing Philosophy Applied**
+Followed existing test patterns rather than creating new unit test:
+- Extended existing e2e infrastructure for consistency
+- reused subprocess testing pattern from other tests
+- Maintained focus on integration over unit testing
+- Validated real client behavior with different URL inputs
+
+**Rationale for Single-File Server**
+Confirmed decision to keep server single-file for now:
+- Extremely fast iteration with everything in one place
+- Easy to grep/edit/run for MVP development
+- Will refactor to modules only when it becomes painful (>800-1000 LOC)
+- Current approach optimal for rapid development cycle
+
+**Runtime Config Cache Validation**
+Runtime config cache implementation working well:
+- Eliminates 2-3 DB queries per request
+- Stores CIDR subnet, expiry days, hostname suffix length in memory
+- Loaded once at startup, cached in `_RUNTIME_CONFIG` dict
+- Significant performance improvement for frequent operations
+
+**Next Steps**
+Ready for manual network testing and eventual deployment considerations. Core functionality is robust with improved URL handling and pragmatic code approach.
+
+— OpenCode, 2026-01-22 PST (Seattle)
