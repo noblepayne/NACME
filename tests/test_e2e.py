@@ -174,3 +174,52 @@ def test_end_to_end_onboarding(test_env, server_process, api_key):
         assert "Key:" in proc.stdout
         assert "Host:" in proc.stdout
         assert "Expires:" in proc.stdout
+
+
+def test_url_handling_variants(test_env, server_process, api_key):
+    """Test that client handles different server URL formats correctly."""
+    import urllib.parse
+
+    base_port = test_env["NACME_PUBLIC_PORT"]
+
+    # Test different URL formats that should all resolve to the same endpoint
+    url_variants = [
+        f"http://localhost:{base_port}",  # no trailing slash
+        f"http://localhost:{base_port}/",  # single trailing slash
+        f"http://localhost:{base_port}//",  # double trailing slash
+        f"http://localhost:{base_port}/api",  # path without trailing slash
+        f"http://localhost:{base_port}/api/",  # path with trailing slash
+    ]
+
+    for variant_url in url_variants:
+        with tempfile.TemporaryDirectory() as temp_out_dir:
+            client_env = dict(test_env)
+            client_env.update(
+                {
+                    "NACME_SERVER_URL": variant_url,
+                    "NACME_API_KEY": api_key,
+                    "NACME_OUT_DIR": temp_out_dir,
+                }
+            )
+
+            client_path = os.path.join(
+                os.path.dirname(__file__), "..", "nacme", "client.py"
+            )
+
+            proc = subprocess.run(
+                [sys.executable, client_path],
+                env=dict(os.environ, **client_env),
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            # Should succeed regardless of URL format quirks
+            assert proc.returncode == 0, (
+                f"Client failed with URL {variant_url}: {proc.stderr}"
+            )
+
+            # Verify certificate files were created
+            assert os.path.exists(os.path.join(temp_out_dir, "ca.crt"))
+            assert os.path.exists(os.path.join(temp_out_dir, "host.crt"))
+            assert os.path.exists(os.path.join(temp_out_dir, "host.key"))

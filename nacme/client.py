@@ -5,6 +5,7 @@ import sys
 import tempfile
 import pathlib
 import time
+import urllib.parse
 
 import httpx
 import pydantic
@@ -106,7 +107,7 @@ def main():
     try:
         with httpx.Client(timeout=30) as client:
             resp = client.post(
-                f"{str(config.server_url).rstrip('/')}/add",
+                urllib.parse.urljoin(str(config.server_url), "/add"),
                 json=payload,
                 headers={"Content-Type": "application/json"},
             )
