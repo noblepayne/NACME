@@ -346,3 +346,66 @@ First release attempt failed due to GitHub Actions workflow inconsistency. Relea
 Proceed with corrected v0.1.0 release using fixed GitHub Actions workflow.
 
 — OpenCode, 2025-01-22 PST (Seattle)
+
+### 2026-01-22 – Beads Workflow Management Integration
+
+**Summary**
+Integrated Beads AI-native issue tracking system into NACME project to provide better workflow management for AI agents. Added beads as flake dependency, initialized configuration, and set up proper git integration for issue tracking.
+
+**Key Changes Made**
+
+**Flake Integration**
+- Added `bd` input to flake.nix pointing to steveyegge/beads GitHub repository
+- Configured nixpkgs following to ensure consistent dependency resolution
+- Added beads package to development shell environment
+- Updated flake.lock with new dependencies (beads, flake-utils, systems)
+
+**Beads Configuration**
+- Initialized `.beads/` directory with complete configuration setup
+- Added `.beads/config.yaml` with default settings for workflow management
+- Created `.beads/README.md` with comprehensive documentation and quick start guide
+- Set up `.beads/.gitignore` to exclude runtime files while tracking important config
+- Added `.beads/metadata.json` and `.beads/interactions.jsonl` for issue tracking
+- Configured `.gitattributes` for proper JSONL merge handling
+
+**Git Integration**
+- Set up git merge driver for beads JSONL files to handle merge conflicts intelligently
+- Configured proper gitignore patterns to exclude database files, daemon runtime files, and machine-specific state
+- Ensured only configuration and documentation files are tracked while runtime data remains local
+
+**Rationale for Beads Integration**
+- AI-native design: CLI-first interface works seamlessly with AI coding agents
+- Git-native: Issues live in repository alongside code, perfect for our development workflow
+- Offline-capable: Works offline, syncs when pushing - fits with our development philosophy
+- Branch-aware: Issues can follow our branch workflow (next branch for features)
+- Lightweight: Fast, minimal overhead, stays out of the way
+
+**Configuration Decisions**
+- Used default beads configuration with sensible defaults
+- Left sync branch unset for now (will configure when needed for team workflows)
+- Enabled auto-start daemon for better UX
+- Configured proper JSONL git integration for merge conflict resolution
+
+**Setup Files Added**
+- `.beads/.gitignore`: Excludes runtime files, databases, daemon state
+- `.beads/config.yaml`: Beads configuration with all default settings
+- `.beads/README.md`: Comprehensive documentation for team usage
+- `.beads/metadata.json`: Project metadata for beads system
+- `.beads/interactions.jsonl`: Empty interaction log ready for use
+- `.gitattributes`: Git merge driver configuration for JSONL files
+- Updated `flake.nix` and `flake.lock`: Beads dependency integration
+
+**Next Steps**
+- Ready to use `bd` commands for issue tracking and workflow management
+- Can create issues with `bd create` and track progress through development cycles
+- Issues will sync with git repository and can be managed alongside code
+- Future team members can easily pick up workflow through beads documentation
+
+**Beads Commands Available**
+- `bd create "issue title"`: Create new issues
+- `bd list`: View all issues
+- `bd show <issue-id>`: View issue details
+- `bd update <issue-id> --status in_progress/done`: Update status
+- `bd sync`: Sync issues with git remote
+
+— OpenCode, 2026-01-22 PST (Seattle)

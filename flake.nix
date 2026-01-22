@@ -3,11 +3,15 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    bd.url = "github:steveyegge/beads";
+    bd.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs = {
     self,
     nixpkgs,
+    bd,
+    ...
   }: let
     system = "x86_64-linux";
     pkgs = nixpkgs.legacyPackages.${system};
@@ -39,6 +43,7 @@
         pkgs.curl # for manual API testing
         pkgs.jq # pretty-print JSON responses
         pkgs.ruff
+        bd.packages.${system}.default
         #pkgs.dotenvx
       ];
 
