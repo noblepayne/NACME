@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v0.1.0)'
+        required: true
+        default: 'v0.1.0'
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Run tests
+        run: nix develop -c pytest
+  
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Extract version
+      id: version
+      run: |
+        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          VERSION="${{ github.event.inputs.version }}"
+        else
+          VERSION=${GITHUB_REF#refs/tags/}
+        fi
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "version_no_v=${VERSION#v}" >> $GITHUB_OUTPUT
+    
+    - name: Verify CHANGELOG
+      run: |
+        if ! grep -q "## \[${{ steps.version.outputs.version_no_v }}\]" CHANGELOG.md; then
+          echo "ERROR: CHANGELOG.md missing entry for ${{ steps.version.outputs.version }}"
+          exit 1
+        fi
+    
+    - name: Generate release notes
+      id: release_notes
+      run: |
+        # Extract section from CHANGELOG
+        awk '/## \[${{ steps.version.outputs.version_no_v }}\]/{flag=1;next}/## \[/{flag=0}flag' CHANGELOG.md > release_notes.md
+        
+        # Add custom header
+        cat > custom_release_notes.md << 'EOF'
+        # NACME ${{ steps.version.outputs.version }}
+        
+        EOF
+        cat release_notes.md >> custom_release_notes.md
+        
+        # Add installation section
+        cat >> custom_release_notes.md << 'EOF'
+        
+        ## Installation
+        
+        ```bash
+        # Option 1: Nix development environment
+        git clone https://github.com/yourusername/nacme.git
+        cd nacme
+        ./dev.sh
+        
+        # Option 2: pip install
+        pip install nacme
+        ```
+        
+        ## Quick Start
+        
+        See README.md for complete setup and usage instructions.
+        EOF
+        
+        echo "release_notes<<EOF" >> $GITHUB_OUTPUT
+        cat custom_release_notes.md >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.version.outputs.version }}
+        name: NACME ${{ steps.version.outputs.version }}
+        body: ${{ steps.release_notes.outputs.release_notes }}
+        draft: false
+        prerelease: false
+        generate_release_notes: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Set up for next development
+      if: startsWith(github.ref, 'refs/tags/v')
+      run: |
+        # Prepare for next development cycle by updating CHANGELOG
+        sed -i '/## \[Unreleased\]/a\\n## [Unreleased]' CHANGELOG.md
+        sed -i '/^$/d' CHANGELOG.md

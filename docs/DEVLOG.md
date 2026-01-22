@@ -304,4 +304,45 @@ Runtime config cache implementation working well:
 **Next Steps**
 Ready for manual network testing and eventual deployment considerations. Core functionality is robust with improved URL handling and pragmatic code approach.
 
-— OpenCode, 2026-01-22 PST (Seattle)
+### 2025-01-22 – Release Attempt Rollback and Fix
+
+**Summary**
+First release attempt failed due to GitHub Actions workflow inconsistency. Release workflow tried to manually install Python packages instead of using existing Nix development environment. Successfully rolled back, fixed workflow, and prepared for corrected release.
+
+**Issues Encountered**
+
+**GitHub Actions Workflow Mismatch**
+- Problem: release.yml used manual Python pip installation instead of existing Nix setup
+- Root cause: Didn't reuse existing test.yml infrastructure (cachix/install-nix-action + nix develop -c pytest)
+- Impact: Release workflow would have failed due to environment differences
+
+**Rollback Process**
+- Deleted local tag: `git tag -d v0.1.0`
+- Deleted remote tag: `git push origin :v0.1.0`
+- Reset commit: `git reset --hard HEAD~1` to pre-release state
+- All release files restored to staging state
+
+**Fix Implementation**
+- Recreated release.yml using Option A approach (fix existing workflow)
+- Copied Nix setup pattern from test.yml exactly:
+  - `cachix/install-nix-action@v31`
+  - `nix develop -c pytest` for test execution
+- Removed manual Python/pip installation attempts
+- Maintained same release automation structure (version extraction, CHANGELOG validation, release creation)
+
+**Lessons Learned**
+- Always reuse existing working infrastructure instead of reinventing
+- Test workflows should be identical between CI and release
+- Release automation should extend existing patterns, not replace them
+- Simplify: Nix dev shell handles everything, no need for manual dependency management
+
+**Current State**
+- Rollback completed successfully
+- Fixed release.yml with proper Nix setup
+- Ready to attempt corrected v0.1.0 release
+- DEVLOG properly documents failure and fix process
+
+**Next Steps**
+Proceed with corrected v0.1.0 release using fixed GitHub Actions workflow.
+
+— OpenCode, 2025-01-22 PST (Seattle)

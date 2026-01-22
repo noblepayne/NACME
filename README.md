@@ -75,4 +75,34 @@ We prefer small, focused PRs that follow the existing patterns:
 - End-to-end and integration tests preferred over unit tests
 - Maintain the existing code style and import patterns
 
+## Release Notes
+
+### v0.1.0 - First Stable Release
+
+This release delivers a complete automated certificate management solution for Nebula networks:
+
+- **Automated certificate minting** for Nebula networks
+- **SQLite database persistence** for reliability  
+- **End-to-end onboarding flow** with single command
+- **Comprehensive test suite** with 5 passing tests
+- **Nix development environment** for reproducible builds
+- **Robust IP allocation** with collision handling
+- **Concurrency safety** for simultaneous requests
+- **Structured logging** and error handling
+
+#### Current Limitations
+
+- IPv4 focus (IPv6 algorithm ready for future)
+- No certificate renewal functionality yet
+- Development servers without HTTPS
+- Single-file server architecture (by MVP design)
+
+#### Installation
+
+Quick start with `nix develop` or pip install after release.
+
+#### Next Steps
+
+v0.1.1 will focus on certificate renewal and HTTPS support.
+
 Core features are complete and tested for homelab deployments.
