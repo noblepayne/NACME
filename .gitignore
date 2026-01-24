@@ -54,3 +54,9 @@ htmlcov/
 # Certificates (optional - uncomment if you don't want to track test certs)
 # tests/fixtures/ca.crt
 # tests/fixtures/ca.key
+
+# Test Env Cache
+staging
+zstd
+deps.tar.zst
+zstd.tar.gz
