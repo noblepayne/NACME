@@ -1,0 +1,2 @@
+FROM ubuntu:25.10
+RUN apt-get update && apt-get install -y curl git zstd iproute2 sudo && sudo usermod -a -G sudo ubuntu && echo "ubuntu ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
