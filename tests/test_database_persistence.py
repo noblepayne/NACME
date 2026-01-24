@@ -1,4 +1,5 @@
 import os
+import pathlib
 import tempfile
 import time
 import subprocess
@@ -19,8 +20,8 @@ def test_env():
         env = {
             "NACME_MASTER_KEY": "test-master-key-32-chars-long-!",
             "NACME_SUBNET_CIDR": "10.200.0.0/24",
-            "NACME_PUBLIC_PORT": "18001",
-            "NACME_ADMIN_PORT": "19001",
+            "NACME_PUBLIC_PORT": "18000",
+            "NACME_ADMIN_PORT": "19000",
             "NACME_DB_PATH": db_path,
             "NACME_CA_CERT": ca_cert_path,
             "NACME_CA_KEY": ca_key_path,
@@ -90,6 +91,10 @@ def create_api_key(test_env):
         timeout=10,
     )
 
+    if resp.status_code != 200:
+        print(f"Response status: {resp.status_code}")
+        print(f"Response text: {resp.text}")
+
     assert resp.status_code == 200
     data = resp.json()
     return data["api_key"]
@@ -97,11 +102,25 @@ def create_api_key(test_env):
 
 def add_host(test_env, api_key):
     """Add a host via public API."""
+
     public_url = f"http://localhost:{test_env['NACME_PUBLIC_PORT']}"
+
+    # Generate keypair locally like the client does
+    with tempfile.TemporaryDirectory() as tmp:
+        key_path = f"{tmp}/test.key"
+        pub_path = f"{tmp}/test.pub"
+
+        subprocess.run(
+            ["nebula-cert", "keygen", "-out-key", key_path, "-out-pub", pub_path],
+            check=True,
+            capture_output=True,
+        )
+
+        public_key = pathlib.Path(pub_path).read_text()
 
     resp = httpx.post(
         f"{public_url}/add",
-        json={"api_key": api_key, "hostname_prefix": "test"},
+        json={"api_key": api_key, "hostname_prefix": "test", "public_key": public_key},
         timeout=10,
     )
 

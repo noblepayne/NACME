@@ -6,6 +6,7 @@ import tempfile
 import pathlib
 import time
 import urllib.parse
+import subprocess
 
 import httpx
 import pydantic
@@ -97,56 +98,97 @@ def main():
         print(f"  key:  {key_path}")
         sys.exit(0)
 
-    payload = {"api_key": config.api_key}
-    if config.hostname_prefix:
-        payload["hostname_prefix"] = config.hostname_prefix
+    # Generate keypair locally
+    print("Generating Nebula keypair locally...")
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        temp_key = pathlib.Path(tmp_dir) / "temp.key"
+        temp_pub = pathlib.Path(tmp_dir) / "temp.pub"
 
-    print(f"Requesting new host cert from {config.server_url}/add ...")
-    print(f"DEBUG: server_url='{config.server_url}', type={type(config.server_url)}")
-
-    try:
-        with httpx.Client(timeout=30) as client:
-            resp = client.post(
-                urllib.parse.urljoin(str(config.server_url), "/add"),
-                json=payload,
-                headers={"Content-Type": "application/json"},
+        # Generate keypair using nebula-cert
+        try:
+            subprocess.run(
+                [
+                    "nebula-cert",
+                    "keygen",
+                    "-out-key",
+                    str(temp_key),
+                    "-out-pub",
+                    str(temp_pub),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
             )
-            resp.raise_for_status()
-            data = resp.json()
+        except subprocess.CalledProcessError as e:
+            print(f"Failed to generate keypair: {e.stderr}", file=sys.stderr)
+            sys.exit(1)
+        except FileNotFoundError:
+            print(
+                "Error: nebula-cert not found in PATH. Please install Nebula.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
-        ca_path = config.out_dir / config.ca_file
+        # Read public key for request
+        public_key = temp_pub.read_text()
 
-        # Atomic writes
-        def atomic_write(path: pathlib.Path, content: str):
-            with tempfile.NamedTemporaryFile(
-                mode="w", dir=config.out_dir, delete=False
-            ) as tmp:
-                tmp.write(content)
-            os.rename(tmp.name, path)
-            os.chmod(path, 0o600)  # restrictive perms for key
+        # Prepare request with public key
+        payload = {"api_key": config.api_key, "public_key": public_key}
+        if config.hostname_prefix:
+            payload["hostname_prefix"] = config.hostname_prefix
 
-        atomic_write(ca_path, data["ca_cert"])
-        atomic_write(cert_path, data["host_cert"])
-        atomic_write(key_path, data["host_key"])
+        print(f"Requesting certificate from {config.server_url}/add ...")
 
-        print("Success! Wrote files:")
-        print(f"  CA:   {ca_path}")
-        print(f"  Cert: {cert_path}")
-        print(f"  Key:  {key_path}")
-        print(f"  Host: {data['hostname']} @ {data['ip']}")
-        print(f"  Expires: {time.ctime(data['expiry'])}")
+        try:
+            with httpx.Client(timeout=30) as client:
+                resp = client.post(
+                    urllib.parse.urljoin(str(config.server_url), "/add"),
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                )
+                resp.raise_for_status()
+                data = resp.json()
 
-    except httpx.HTTPStatusError as e:
-        print(f"Request failed: {e}", file=sys.stderr)
-        if e.response is not None:
-            print(e.response.text, file=sys.stderr)
-        sys.exit(1)
-    except httpx.RequestError as e:
-        print(f"Request error: {e}", file=sys.stderr)
-        sys.exit(1)
-    except Exception as e:
-        print(f"Unexpected error: {e}", file=sys.stderr)
-        sys.exit(1)
+            ca_path = config.out_dir / config.ca_file
+
+            # Atomic writes
+            def atomic_write(path: pathlib.Path, content: str, mode: int = 0o600):
+                with tempfile.NamedTemporaryFile(
+                    mode="w", dir=config.out_dir, delete=False
+                ) as tmp:
+                    tmp.write(content)
+                os.rename(tmp.name, path)
+                os.chmod(path, mode)
+
+            # Write files: CA from response, cert from response, key from local generation
+            atomic_write(ca_path, data["ca_cert"], mode=0o644)  # CA can be readable
+            atomic_write(
+                cert_path, data["host_cert"], mode=0o644
+            )  # Cert can be readable
+            atomic_write(
+                key_path, temp_key.read_text(), mode=0o600
+            )  # Key must be private
+
+            print("Successfully enrolled host!")
+            print("Files written:")
+            print(f"  CA:   {ca_path}")
+            print(f"  Cert: {cert_path}")
+            print(f"  Key:  {key_path}")
+            print(f"Hostname: {data['hostname']} @ {data['ip']}")
+            print(f"Expires: {time.ctime(data['expiry'])}")
+            print("🔒 Private key was generated locally and never sent to the server.")
+
+        except httpx.HTTPStatusError as e:
+            print(f"Request failed: {e}", file=sys.stderr)
+            if e.response is not None:
+                print(e.response.text, file=sys.stderr)
+            sys.exit(1)
+        except httpx.RequestError as e:
+            print(f"Request error: {e}", file=sys.stderr)
+            sys.exit(1)
+        except Exception as e:
+            print(f"Unexpected error: {e}", file=sys.stderr)
+            sys.exit(1)
 
 
 if __name__ == "__main__":

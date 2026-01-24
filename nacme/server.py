@@ -1,16 +1,17 @@
 # nacme_server.py - Single-file MVP NACME server (add-only)
 import asyncio
+import base64
+import contextlib
 import hashlib
+import ipaddress
 import json
 import os
+import pathlib
+import re
 import secrets
 import sys
 import tempfile
 import time
-import contextlib
-import pathlib
-import typing
-import ipaddress
 
 import aiosqlite
 import structlog
@@ -116,45 +117,48 @@ async def get_db():
 async def init_db():
     async with get_db() as conn:
         await conn.executescript("""
-            CREATE TABLE IF NOT EXISTS configs (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS api_keys (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                key_hash TEXT NOT NULL UNIQUE,
-                expiration INTEGER,
-                uses_remaining INTEGER,
-                groups_json TEXT NOT NULL,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS hosts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                hostname TEXT NOT NULL UNIQUE,
-                ip TEXT NOT NULL UNIQUE,
-                groups_json TEXT NOT NULL,
-                expiry INTEGER NOT NULL,
-                api_key_id INTEGER NOT NULL,
-                current_key TEXT NOT NULL,
-                current_cert TEXT NOT NULL,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
-            );
+                CREATE TABLE IF NOT EXISTS configs (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS api_keys (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    key_hash TEXT NOT NULL UNIQUE,
+                    expiration INTEGER,
+                    uses_remaining INTEGER,
+                    groups_json TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS hosts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    hostname TEXT NOT NULL UNIQUE,
+                    ip TEXT NOT NULL UNIQUE,
+                    groups_json TEXT NOT NULL,
+                    expiry INTEGER NOT NULL,
+                    api_key_id INTEGER NOT NULL,
+                    current_cert TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
             CREATE INDEX IF NOT EXISTS idx_hosts_expiry ON hosts(expiry);
             CREATE INDEX IF NOT EXISTS idx_hosts_hostname ON hosts(hostname);
             CREATE INDEX IF NOT EXISTS idx_hosts_ip ON hosts(ip);
             CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash);
         """)
 
-        # Seed from config if missing
-        cursor = await conn.execute("SELECT 1 FROM configs WHERE key = 'cidr'")
-        if not await cursor.fetchone():
-            await conn.execute(
-                "INSERT INTO configs (key, value) VALUES (?, ?)",
-                ("cidr", CONFIG.subnet_cidr),
-            )
-            log.info("seeded_cidr", cidr=CONFIG.subnet_cidr)
+        # Seed from config if missing - atomic transaction ensures all or nothing
+        try:
+            cursor = await conn.execute("SELECT 1 FROM configs WHERE key = 'cidr'")
+            if not await cursor.fetchone():
+                await conn.execute(
+                    "INSERT INTO configs (key, value) VALUES (?, ?)",
+                    ("cidr", CONFIG.subnet_cidr),
+                )
+                log.info("seeded_cidr", cidr=CONFIG.subnet_cidr)
+        except Exception as e:
+            log.error("config_seeding_failed", key="cidr", error=str(e), exc_info=True)
+            raise
 
         for key, val in [
             ("default_expiry_days", str(CONFIG.default_expiry_days)),
@@ -171,19 +175,102 @@ async def init_db():
         for row in await cursor.fetchall():
             _RUNTIME_CONFIG[row[0]] = row[1]
 
+        # Cache CA certificate at startup to avoid repeated disk I/O
+        try:
+            ca_content = pathlib.Path(CONFIG.ca_cert).read_text()
+            _RUNTIME_CONFIG["ca_cert_content"] = ca_content
+            log.info("ca_cert_cached", path=CONFIG.ca_cert)
+        except Exception as e:
+            log.error("ca_cert_cache_failed", path=CONFIG.ca_cert, error=str(e))
+            raise
+
         log.info("runtime_config_cached", config=_RUNTIME_CONFIG)
 
 
 # === Models ===
 class AddRequest(pydantic.BaseModel):
     api_key: str
-    hostname_prefix: typing.Optional[str] = None
+    hostname_prefix: str | None = None
+    public_key: str  # PEM string, required for client-generated keypair system
+
+    @pydantic.field_validator("hostname_prefix")
+    def sanitize_hostname_prefix(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+
+        # Strip whitespace
+        v = v.strip()
+
+        # Enforce max length
+        if len(v) > 63:
+            raise ValueError("hostname_prefix must be 63 characters or less")
+
+        # Enforce allowed charset: alphanumeric, hyphens only
+
+        if not re.match(r"^[a-zA-Z0-9-]+$", v):
+            raise ValueError(
+                "hostname_prefix may only contain letters, numbers, and hyphens"
+            )
+
+        # Normalize repeated hyphens to single hyphen
+        v = re.sub(r"-+", "-", v)
+
+        # Remove leading/trailing hyphens
+        v = v.strip("-")
+
+        # Ensure not empty after sanitization
+        if not v:
+            raise ValueError("hostname_prefix cannot be empty after sanitization")
+
+        return v
+
+    @pydantic.field_validator("public_key")
+    def validate_public_key(cls, v: str) -> str:
+        if not v:
+            raise ValueError("public_key cannot be empty")
+
+        # Check PEM headers
+        if not v.startswith("-----BEGIN NEBULA X25519 PUBLIC KEY-----"):
+            raise ValueError("public_key must be an X25519 Nebula public key")
+
+        if "-----END NEBULA X25519 PUBLIC KEY-----" not in v:
+            raise ValueError("public_key must have proper PEM footer")
+
+        # Extract base64 content between headers
+
+        try:
+            lines = v.strip().split("\n")
+            base64_lines = [
+                line.strip()
+                for line in lines
+                if line.strip() and not line.startswith("-----")
+            ]
+            if not base64_lines:
+                raise ValueError("public_key has no body content")
+
+            # Attempt to decode base64 content
+            base64_content = "".join(base64_lines)
+            decoded = base64.b64decode(base64_content)
+
+            # X25519 public keys should be 32 bytes
+            if len(decoded) != 32:
+                raise ValueError(
+                    "public_key is not a valid X25519 key (incorrect length)"
+                )
+
+        except Exception as e:
+            if isinstance(e, ValueError):
+                raise
+            raise ValueError(f"public_key contains invalid base64 content: {e}")
+
+        return v
 
 
 class CertBundle(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(exclude_none=True)
+
     ca_cert: str
     host_cert: str
-    host_key: str
     ip: str
     hostname: str
     expiry: int
@@ -191,7 +278,72 @@ class CertBundle(pydantic.BaseModel):
 
 # === Helpers ===
 def hash_key(key: str) -> str:
+    # Security Note: Using raw SHA256 for API key hashing.
+    # For this MVP, we accept the tradeoff of no salt/pepper since:
+    # 1. API keys are high-entropy random strings (not user passwords)
+    # 2. Keys have usage limits and expiration times
+    # 3. Database access already implies compromise of the entire system
+    # Future versions could add a server-side pepper from env vars for defense-in-depth.
     return hashlib.sha256(key.encode()).hexdigest()
+
+
+async def run_nebula_sign(
+    nebula_cmd,
+    hostname: str,
+    ip: str,
+    groups: list[str],
+    expiry_days: int,
+    ca_cert: str,
+    ca_key: str,
+    subnet_cidr: str,
+    public_key_pem: str,
+) -> str:
+    """Run nebula-cert sign command and return the certificate content."""
+    with tempfile.TemporaryDirectory() as tmp:
+        out_crt = pathlib.Path(tmp) / "host.crt"
+        in_pub = pathlib.Path(tmp) / "host.pub"
+
+        # Write client's public key to temporary file
+        in_pub.write_text(public_key_pem)
+
+        nebula_cmd[
+            "sign",
+            "-ca-crt",
+            ca_cert,
+            "-ca-key",
+            ca_key,
+            "-in-pub",
+            str(in_pub),
+            "-name",
+            hostname,
+            "-ip",
+            f"{ip}/{ipaddress.ip_network(subnet_cidr).prefixlen}",
+            "-groups",
+            ",".join(groups),
+            "-duration",
+            f"{expiry_days * 24}h",
+            "-out-crt",
+            str(out_crt),
+        ]()
+
+        # Verify certificate file was created
+        if not out_crt.exists():
+            raise RuntimeError(
+                "nebula-cert completed but output certificate file missing"
+            )
+
+        if out_crt.stat().st_size == 0:
+            raise RuntimeError("nebula-cert created empty certificate file")
+
+        host_cert = out_crt.read_text()
+
+        # Basic certificate validation
+        if "-----BEGIN NEBULA CERTIFICATE V2-----" not in host_cert:
+            raise RuntimeError(
+                "Generated certificate is not a valid Nebula certificate"
+            )
+
+        return host_cert
 
 
 async def allocate_ip(conn: aiosqlite.Connection) -> str:
@@ -318,111 +470,77 @@ async def add_host(request: AddRequest):
                     conn, request.hostname_prefix or "node-"
                 )
 
-                # Generate cert/key with nebula-cert
+                # Public key validation is now handled by Pydantic validator in AddRequest
+
                 nebula = plumbum.local["nebula-cert"]
-                with tempfile.TemporaryDirectory() as tmp:
-                    out_crt = pathlib.Path(tmp) / "host.crt"
-                    out_key = pathlib.Path(tmp) / "host.key"
 
-                    try:
-                        nebula[
-                            "sign",
-                            "-ca-crt",
-                            CONFIG.ca_cert,
-                            "-ca-key",
-                            CONFIG.ca_key,
-                            "-name",
-                            hostname,
-                            "-ip",
-                            f"{ip}/{ipaddress.ip_network(CONFIG.subnet_cidr).prefixlen}",
-                            "-groups",
-                            ",".join(groups),
-                            "-duration",
-                            f"{expiry_days * 24}h",
-                            "-out-crt",
-                            str(out_crt),
-                            "-out-key",
-                            str(out_key),
-                        ]()
+                try:
+                    host_cert = await run_nebula_sign(
+                        nebula,
+                        hostname=hostname,
+                        ip=ip,
+                        groups=groups,
+                        expiry_days=expiry_days,
+                        ca_cert=CONFIG.ca_cert,
+                        ca_key=CONFIG.ca_key,
+                        subnet_cidr=CONFIG.subnet_cidr,
+                        public_key_pem=request.public_key,
+                    )
 
-                        # Verify certificate and key files were created
-                        if not out_crt.exists() or not out_key.exists():
-                            raise RuntimeError(
-                                "nebula-cert completed but output files missing"
-                            )
+                except plumbum.ProcessExecutionError as e:
+                    # Analyze specific failure modes
+                    error_msg = str(e).lower()
+                    stderr_lower = e.stderr.lower() if e.stderr else ""
 
-                        if out_crt.stat().st_size == 0 or out_key.stat().st_size == 0:
-                            raise RuntimeError("nebula-cert created empty output files")
-
-                        host_cert = out_crt.read_text()
-                        host_key = out_key.read_text()
-
-                        # Basic certificate validation
-                        if "-----BEGIN NEBULA CERTIFICATE V2-----" not in host_cert:
-                            raise RuntimeError(
-                                "Generated certificate is not a valid Nebula certificate"
-                            )
-
-                        if "-----BEGIN NEBULA" not in host_key:
-                            raise RuntimeError(
-                                "Generated key is not a valid Nebula private key"
-                            )
-
-                    except plumbum.ProcessExecutionError as e:
-                        # Analyze specific failure modes
-                        error_msg = str(e).lower()
-                        stderr_lower = e.stderr.lower() if e.stderr else ""
-
-                        if (
-                            "no such file" in error_msg
-                            or "command not found" in error_msg
-                        ):
-                            user_msg = "nebula-cert binary not found or not executable"
-                        elif (
-                            "permission denied" in error_msg
-                            or "access denied" in error_msg
-                        ):
-                            user_msg = "Permission denied accessing CA files or working directory"
-                        elif (
-                            "invalid" in stderr_lower and "certificate" in stderr_lower
-                        ):
-                            user_msg = (
-                                "CA certificate or key file is invalid or corrupted"
-                            )
-                        elif "invalid" in stderr_lower and "ip" in stderr_lower:
-                            user_msg = f"Invalid IP address format: {ip}"
-                        elif "invalid" in stderr_lower and "groups" in stderr_lower:
-                            user_msg = f"Invalid groups format: {groups}"
-                        else:
-                            user_msg = f"Certificate generation failed: {stderr_lower or str(e)}"
-
-                        log.error(
-                            "nebula_cert_sign_failed",
-                            error=str(e),
-                            stdout=e.stdout,
-                            stderr=e.stderr,
-                            hostname=hostname,
-                            ip=ip,
-                            user_message=user_msg,
+                    if "no such file" in error_msg or "command not found" in error_msg:
+                        user_msg = "nebula-cert binary not found or not executable"
+                    elif (
+                        "permission denied" in error_msg or "access denied" in error_msg
+                    ):
+                        user_msg = (
+                            "Permission denied accessing CA files or working directory"
                         )
-                        raise fastapi.HTTPException(500, user_msg)
-                    except Exception as e:
-                        log.error(
-                            "nebula_cert_unexpected_error",
-                            error=str(e),
-                            hostname=hostname,
-                            ip=ip,
+                    elif "invalid" in stderr_lower and "certificate" in stderr_lower:
+                        user_msg = "CA certificate or key file is invalid or corrupted"
+                    elif "invalid" in stderr_lower and "ip" in stderr_lower:
+                        user_msg = f"Invalid IP address format: {ip}"
+                    elif "invalid" in stderr_lower and "groups" in stderr_lower:
+                        user_msg = f"Invalid groups format: {groups}"
+                    else:
+                        user_msg = (
+                            f"Certificate generation failed: {stderr_lower or str(e)}"
                         )
-                        raise fastapi.HTTPException(
-                            500, f"Unexpected error during certificate generation: {e}"
-                        )
+
+                    log.error(
+                        "nebula_cert_sign_failed",
+                        error=str(e),
+                        stdout=e.stdout,
+                        stderr=e.stderr,
+                        hostname=hostname,
+                        ip=ip,
+                        user_message=user_msg,
+                    )
+                    raise fastapi.HTTPException(500, user_msg)
+                except fastapi.HTTPException:
+                    # Let FastAPI exceptions bubble up unchanged
+                    raise
+                except Exception as e:
+                    log.error(
+                        "nebula_cert_unexpected_error",
+                        error=str(e),
+                        hostname=hostname,
+                        ip=ip,
+                    )
+                    raise fastapi.HTTPException(
+                        500, f"Unexpected error during certificate generation: {e}"
+                    )
 
                 # Atomic insert - UNIQUE constraints will catch collisions
                 await conn.execute(
                     """
                     INSERT INTO hosts (hostname, ip, groups_json, expiry, api_key_id, 
-                                       current_key, current_cert, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                       current_cert, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         hostname,
@@ -430,7 +548,6 @@ async def add_host(request: AddRequest):
                         json.dumps(groups),
                         expiry,
                         api_id,
-                        host_key,
                         host_cert,
                         now,
                         now,
@@ -484,13 +601,19 @@ async def add_host(request: AddRequest):
                 (uses - 1, api_id),
             )
 
-    ca_content = pathlib.Path(CONFIG.ca_cert).read_text()
+    # Use cached CA certificate to avoid disk I/O per request
+    ca_content = _RUNTIME_CONFIG.get("ca_cert_content")
+    if ca_content is None:
+        raise fastapi.HTTPException(
+            500, "CA certificate not cached - server configuration error"
+        )
 
-    log.info("host_added_success", hostname=hostname, ip=ip, groups=groups)
+    log.info(
+        "host_added_success", hostname=hostname, ip=ip, groups=groups, client_key=True
+    )
     return CertBundle(
         ca_cert=ca_content,
         host_cert=host_cert,
-        host_key=host_key,
         ip=ip,
         hostname=hostname,
         expiry=expiry,
@@ -512,8 +635,8 @@ async def verify_master_key(
 @admin_app.post("/keys")
 async def create_api_key(
     groups: list[str],
-    expiry_unix: typing.Optional[int] = None,
-    uses_remaining: typing.Optional[int] = None,
+    expiry_unix: int | None = None,
+    uses_remaining: int | None = None,
     _=fastapi.Depends(verify_master_key),
 ):
     if not groups:
@@ -523,16 +646,21 @@ async def create_api_key(
     key_hash = hash_key(new_key)
     now = int(time.time())
 
-    async with get_db() as conn:
-        await conn.execute(
-            """
-            INSERT INTO api_keys (key_hash, expiration, uses_remaining, groups_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (key_hash, expiry_unix, uses_remaining, json.dumps(groups), now, now),
-        )
+    try:
+        async with get_db() as conn:
+            await conn.execute(
+                """
+                INSERT INTO api_keys (key_hash, expiration, uses_remaining, groups_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (key_hash, expiry_unix, uses_remaining, json.dumps(groups), now, now),
+            )
 
-    log.info("api_key_created", groups=groups, uses=uses_remaining)
+        log.info("api_key_created", groups=groups, uses=uses_remaining)
+
+    except Exception as e:
+        log.error("api_key_creation_failed", error=str(e), exc_info=True)
+        raise fastapi.HTTPException(500, f"API key creation failed: {str(e)}")
     return {
         "api_key": new_key,
         "note": "This key is shown only once. Store it securely.",

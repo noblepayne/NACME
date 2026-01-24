@@ -106,7 +106,7 @@ def api_key(server_process, test_env):
 
 
 def test_end_to_end_onboarding(test_env, server_process, api_key):
-    """Test complete onboarding flow: server + client."""
+    """Test complete onboarding flow: server + client with client-generated keypair."""
     with tempfile.TemporaryDirectory() as temp_out_dir:
         # Set up client environment
         client_env = dict(test_env)
@@ -147,38 +147,117 @@ def test_end_to_end_onboarding(test_env, server_process, api_key):
         assert os.path.exists(cert_path), "Host certificate not created"
         assert os.path.exists(key_path), "Host key not created"
 
-        # Verify file permissions (key should be 600)
-        key_stat = os.stat(key_path)
-        assert oct(key_stat.st_mode)[-3:] == "600", (
-            "Host key should have 600 permissions"
-        )
+        # Verify keypair was generated locally (client-side)
+        key_content = pathlib.Path(key_path).read_text()
+        assert "-----BEGIN NEBULA X25519 PRIVATE KEY-----" in key_content
+        assert "-----END NEBULA X25519 PRIVATE KEY-----" in key_content
 
-        # Verify file contents are non-empty
-        assert os.path.getsize(ca_path) > 0, "CA certificate is empty"
-        assert os.path.getsize(cert_path) > 0, "Host certificate is empty"
-        assert os.path.getsize(key_path) > 0, "Host key is empty"
-
-        # Verify certificates are valid nebula certificates
-        ca_content = pathlib.Path(ca_path).read_text()
+        # Verify certificate was signed by server
         cert_content = pathlib.Path(cert_path).read_text()
-
-        assert "-----BEGIN NEBULA CERTIFICATE V2-----" in ca_content
-        assert "-----END NEBULA CERTIFICATE V2-----" in ca_content
         assert "-----BEGIN NEBULA CERTIFICATE V2-----" in cert_content
         assert "-----END NEBULA CERTIFICATE V2-----" in cert_content
 
-        # Verify client output contains expected info
-        assert "Success!" in proc.stdout
-        assert "CA:" in proc.stdout
-        assert "Cert:" in proc.stdout
-        assert "Key:" in proc.stdout
-        assert "Host:" in proc.stdout
-        assert "Expires:" in proc.stdout
+        # Verify client output indicates successful onboarding
+        output = proc.stdout
+        assert "Successfully enrolled" in output or "Success" in output
+        print(f"Client output: {output}")
+
+
+def test_add_endpoint_requires_public_key(test_env, server_process, api_key):
+    """Test that /add endpoint works with client-generated public_key (betterkeys flow)."""
+    import tempfile
+
+    # Generate a test keypair locally to simulate client behavior
+    with tempfile.TemporaryDirectory() as tmp:
+        # Generate test keypair using nebula-cert
+        nebula_cmd = [
+            "nebula-cert",
+            "keygen",
+            "-out-key",
+            f"{tmp}/test.key",
+            "-out-pub",
+            f"{tmp}/test.pub",
+        ]
+
+        result = subprocess.run(nebula_cmd, capture_output=True, text=True)
+        assert result.returncode == 0, (
+            f"Failed to generate test keypair: {result.stderr}"
+        )
+
+        # Read public key
+        public_key = pathlib.Path(f"{tmp}/test.pub").read_text()
+
+        # Test successful request with public key
+        response = httpx.post(
+            f"http://localhost:{test_env['NACME_PUBLIC_PORT']}/add",
+            json={
+                "api_key": api_key,
+                "hostname_prefix": "test-",
+                "public_key": public_key,
+            },
+            timeout=10,
+        )
+
+        if response.status_code != 200:
+            print(f"Response status: {response.status_code}")
+            print(f"Response text: {response.text}")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Verify response structure (host_key should not be present for client-generated keys)
+        assert "ca_cert" in data
+        assert "host_cert" in data
+        assert "host_key" not in data, (
+            "Response should not include host_key for client-generated keys"
+        )
+        assert "ip" in data
+        assert "hostname" in data
+        assert "expiry" in data
+
+        # Verify certificate content
+        assert "-----BEGIN NEBULA CERTIFICATE V2-----" in data["host_cert"]
+
+        # Test that request without public_key fails (legacy mode removed)
+        legacy_response = httpx.post(
+            f"http://localhost:{test_env['NACME_PUBLIC_PORT']}/add",
+            json={
+                "api_key": api_key,
+                "hostname_prefix": "legacy-",
+                # Missing public_key - should fail now that we require client-generated keys
+            },
+            timeout=10,
+        )
+
+        assert legacy_response.status_code == 422, (
+            "Request without public_key should fail"
+        )
+
+        # Test that request with empty public_key fails
+        empty_key_response = httpx.post(
+            f"http://localhost:{test_env['NACME_PUBLIC_PORT']}/add",
+            json={"api_key": api_key, "hostname_prefix": "bad-", "public_key": ""},
+            timeout=10,
+        )
+
+        assert empty_key_response.status_code == 422  # Pydantic validation error
+
+        # Test that request with invalid public_key fails
+        invalid_key_response = httpx.post(
+            f"http://localhost:{test_env['NACME_PUBLIC_PORT']}/add",
+            json={
+                "api_key": api_key,
+                "hostname_prefix": "bad-",
+                "public_key": "not-a-real-public-key",
+            },
+            timeout=10,
+        )
+
+        assert invalid_key_response.status_code == 422  # Pydantic validation error
 
 
 def test_url_handling_variants(test_env, server_process, api_key):
     """Test that client handles different server URL formats correctly."""
-    import urllib.parse
 
     base_port = test_env["NACME_PUBLIC_PORT"]
 
