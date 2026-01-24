@@ -58,6 +58,18 @@ python nacme/client.py  # writes ca.crt, host.crt, host.key
 - `NACME_DEFAULT_EXPIRY_DAYS` - Certificate validity period (default: 365)
 - `NACME_RANDOM_SUFFIX_LENGTH` - Length of hostname suffix (default: 6)
 
+## Security
+
+### Client-Generated Keypairs (Betterkeys)
+
+NACME now supports client-generated keypairs for enhanced security:
+
+- **Private key isolation**: Private keys are generated locally on the client machine and never transmitted to or stored on the server
+- **Zero server exposure**: Server compromise cannot leak private keys since they never touch the server
+- **Compatible workflow**: Uses the same `nebula-cert keygen` + `sign -in-pub` pattern as manual Nebula certificate management
+
+**Usage**: The client automatically generates keypairs locally and sends only the public key to the server. This is the required mode for all clients.
+
 ## Development
 
 Testing strategy uses end-to-end blackbox tests with some smoke tests.

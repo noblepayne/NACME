@@ -51,6 +51,21 @@ Thumbs.db
 .pytest_cache/
 htmlcov/
 
+# Beads runtime artifacts (ignore database and runtime files only)
+.beads/beads.db
+.beads/beads.db-wal
+.beads/beads.db-shm
+.beads/daemon.lock
+.beads/daemon.pid
+.beads/daemon.log
+.beads/sync-state.json
+.beads/last-touched
+.beads/interactions.jsonl
+.beads/beads.left.jsonl
+.beads/beads.left.meta.json
+.beads/issues.jsonl.bak
+.beads/config.yaml
+
 # Certificates (optional - uncomment if you don't want to track test certs)
 # tests/fixtures/ca.crt
 # tests/fixtures/ca.key
