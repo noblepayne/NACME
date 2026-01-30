@@ -21,6 +21,7 @@ class ClientConfig(pydantic.BaseModel):
     cert_file: str = "host.crt"
     key_file: str = "host.key"
     hostname_prefix: str | None = None
+    suggested_ip: str | None = None  # NEW: Optional IP suggestion
 
     @pydantic.field_validator("out_dir", mode="before")
     def ensure_dir(cls, v):
@@ -47,6 +48,9 @@ def load_config() -> ClientConfig:
         "--prefix", help="Hostname prefix (overrides NACME_HOSTNAME_PREFIX)"
     )
     parser.add_argument(
+        "--ip", help="Suggested IP address (overrides NACME_SUGGESTED_IP)"
+    )
+    parser.add_argument(
         "--out-dir",
         type=pathlib.Path,
         help="Output directory (overrides NACME_OUT_DIR)",
@@ -65,6 +69,7 @@ def load_config() -> ClientConfig:
         "server_url": args.server or os.getenv("NACME_SERVER_URL"),
         "api_key": args.key or os.getenv("NACME_API_KEY"),
         "hostname_prefix": args.prefix or os.getenv("NACME_HOSTNAME_PREFIX"),
+        "suggested_ip": args.ip or os.getenv("NACME_SUGGESTED_IP"),
         "out_dir": args.out_dir or os.getenv("NACME_OUT_DIR"),
         "ca_file": args.ca_file or os.getenv("NACME_CA_FILE"),
         "cert_file": args.cert_file or os.getenv("NACME_CERT_FILE"),
@@ -136,8 +141,12 @@ def main():
         payload = {"api_key": config.api_key, "public_key": public_key}
         if config.hostname_prefix:
             payload["hostname_prefix"] = config.hostname_prefix
+        if config.suggested_ip:
+            payload["suggested_ip"] = config.suggested_ip
 
         print(f"Requesting certificate from {config.server_url}/add ...")
+        if config.suggested_ip:
+            print(f"  Suggesting IP: {config.suggested_ip}")
 
         try:
             with httpx.Client(timeout=30) as client:

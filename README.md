@@ -33,7 +33,7 @@ python nacme/client.py  # writes ca.crt, host.crt, host.key
 
 **NACME provides:**
 - Automated certificate minting when presented with valid API keys
-- IP allocation and hostname generation
+- IP allocation and hostname generation (with optional IP suggestions)
 - Database persistence across server restarts
 - Simple API for certificate requests
 
@@ -58,17 +58,47 @@ python nacme/client.py  # writes ca.crt, host.crt, host.key
 - `NACME_DEFAULT_EXPIRY_DAYS` - Certificate validity period (default: 365)
 - `NACME_RANDOM_SUFFIX_LENGTH` - Length of hostname suffix (default: 6)
 
-## Security
+**Client-specific**:
+- `NACME_SERVER_URL` - Server URL for client requests
+- `NACME_API_KEY` - API key for authentication
+- `NACME_OUT_DIR` - Output directory for certificates (default: "/etc/nebula")
+- `NACME_HOSTNAME_PREFIX` - Custom hostname prefix (optional)
+- `NACME_SUGGESTED_IP` - Suggested IP address (optional, see below)
+
+## Features
 
 ### Client-Generated Keypairs (Betterkeys)
 
-NACME now supports client-generated keypairs for enhanced security:
+NACME requires client-generated keypairs for enhanced security:
 
 - **Private key isolation**: Private keys are generated locally on the client machine and never transmitted to or stored on the server
 - **Zero server exposure**: Server compromise cannot leak private keys since they never touch the server
 - **Compatible workflow**: Uses the same `nebula-cert keygen` + `sign -in-pub` pattern as manual Nebula certificate management
 
 **Usage**: The client automatically generates keypairs locally and sends only the public key to the server. This is the required mode for all clients.
+
+### Suggested IP Addresses
+
+Clients can suggest specific IP addresses, useful for lighthouse nodes or declarative configurations:
+
+```bash
+# Using CLI flag
+python nacme/client.py --ip 10.100.0.10
+
+# Using environment variable
+export NACME_SUGGESTED_IP="10.100.0.10"
+python nacme/client.py
+```
+
+**Behavior**:
+- If the suggested IP is valid and available, it will be assigned
+- If the suggested IP is already taken, the system automatically falls back to auto-allocation
+- Suggested IPs must be within the configured subnet and cannot be network/broadcast addresses
+
+**Use cases**:
+- **Lighthouse nodes**: Assign stable IPs (e.g., 10.100.0.1, 10.100.0.2) for known infrastructure
+- **NixOS declarative configs**: Specify IP in configuration.nix before deployment
+- **Migration from manual**: Preserve existing IP assignments when switching to NACME
 
 ## Development
 

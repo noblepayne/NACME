@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Client can now suggest specific IP addresses via `--ip` flag or `NACME_SUGGESTED_IP` environment variable
+- Server validates suggested IPs are within configured subnet and not reserved addresses (network/broadcast)
+- Automatic fallback to auto-allocation when suggested IP is already taken
 - Client-generated keypair support (betterkeys) - private keys generated client-side and never sent to server
 - Enhanced public key validation with base64 decoding and length verification
 - Hostname prefix sanitization with charset enforcement and length limits
@@ -59,4 +62,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Config values cached in memory for performance improvement
 - Double-slash URL issue in client using `urllib.parse.urljoin`
 - URL construction now handles trailing slashes and path variations correctly
-
