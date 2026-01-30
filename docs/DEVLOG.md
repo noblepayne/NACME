@@ -1,4 +1,111 @@
 # NACME Dev Log
+### 2026-01-30 – Added Suggested IP Feature for Lighthouse Nodes
+
+**Summary**
+Implemented optional IP suggestion for clients (particularly useful for lighthouse nodes and NixOS declarative configurations). Followed full TDD approach with 10 comprehensive tests covering validation, fallback, race conditions, and client integration.
+
+**Key Decisions & Trade-offs**
+
+- **Validation strategy**: IP must be in configured subnet and cannot be network/broadcast address
+  - Added `validate_ip_in_subnet()` helper function for reusable validation
+  - Pydantic validator handles format validation, helper handles subnet/reserved checks
+  - IPv4-specific broadcast check (IPv6 has no broadcast address)
+
+- **Fallback behavior**: If suggested IP is already taken, silently fall back to auto-allocation
+  - Rationale: Better UX than failing - client gets *an* IP even if not their preferred one
+  - Logged as warning for debugging but request succeeds
+  - Prevents denial-of-service via exhausting suggested IPs
+
+- **Authorization model**: Available to all API keys (no special permission needed)
+  - Simpler than role-based access for MVP
+  - Validation provides sufficient security (subnet enforcement)
+  - Can add permission flags later if needed
+
+- **Client integration**: Both `--ip` CLI flag and `NACME_SUGGESTED_IP` env var supported
+  - CLI flag takes precedence over env var (standard priority)
+  - Env var useful for systemd units or declarative configs
+  - Client shows "Suggesting IP: x.x.x.x" message for transparency
+
+**Implementation Details**
+
+Server changes (`nacme/server.py`):
+- Added optional `suggested_ip: str | None = None` field to `AddRequest` model
+- Pydantic validator for IP format (using `ipaddress.ip_address()`)
+- Helper function `validate_ip_in_subnet()` checks subnet membership and reserved addresses
+- Updated `/add` endpoint with conditional IP allocation logic:
+  1. If suggested_ip provided → validate → check availability → use or fallback
+  2. If not provided → auto-allocate (backward compatible)
+- Return 422 error for invalid suggestions (out of subnet, reserved addresses)
+- Structured logging for acceptance, fallback, and validation failures
+
+Client changes (`nacme/client.py`):
+- Added `suggested_ip: str | None = None` field to `ClientConfig`
+- Added `--ip` argument to CLI parser
+- Added `NACME_SUGGESTED_IP` environment variable support
+- Pass suggested_ip in request payload if provided
+- User feedback message when suggesting IP
+
+**Testing Coverage** (10 new tests in `tests/test_suggested_ip.py`)
+
+Core functionality:
+1. `test_suggested_ip_success` - Valid available IP gets assigned
+2. `test_suggested_ip_already_taken` - Fallback to auto-allocation when taken
+3. `test_suggested_ip_none_uses_auto_allocation` - Backward compatibility
+
+Validation & security:
+4. `test_suggested_ip_out_of_subnet` - Reject IPs outside CIDR (422 error)
+5. `test_suggested_ip_invalid_format` - Reject malformed IPs (422 error)
+6. `test_suggested_ip_network_address` - Reject .0 address (422 error)
+7. `test_suggested_ip_broadcast_address` - Reject .255 address (422 error)
+
+Client integration:
+8. `test_client_passthrough_ip` - E2E with `--ip` CLI flag
+9. `test_client_passthrough_ip_via_env` - E2E with `NACME_SUGGESTED_IP` env var
+
+Edge cases:
+10. `test_multiple_hosts_same_suggested_ip_concurrent` - Race condition handling
+
+**Gotchas & Notes**
+
+- **Race condition handling**: Works via existing retry loop in `/add` endpoint
+  - UNIQUE constraint on hosts.ip triggers IntegrityError
+  - Retry loop catches collision and allocates different IP
+  - One client gets suggested IP, other gets fallback
+
+- **Network/broadcast validation**: Only applies to IPv4
+  - IPv6 has no broadcast address concept
+  - Code checks `net.version == 4` before broadcast validation
+  - Future IPv6 support is handled correctly
+
+- **Test infrastructure**: Reused existing fixtures from other test files
+  - Same server startup, API key creation, keypair generation patterns
+  - Consistent port allocation (18000/19000)
+  - Temporary directories for client output
+
+**Use Cases Enabled**
+
+1. **Lighthouse nodes**: Assign stable IPs (e.g., 10.100.0.1, 10.100.0.2) for known infrastructure
+2. **NixOS declarative config**: Specify IP in configuration.nix before deployment
+3. **Migration from manual**: Preserve existing IP assignments when switching to NACME
+4. **Network planning**: Reserve IP ranges for different purposes (lighthouses, services, clients)
+
+**Performance Impact**
+
+- Minimal overhead: single DB query to check IP availability
+- Validation is fast (Python ipaddress module)
+- Fallback path reuses existing allocation logic
+- No additional database schema changes needed
+
+**Next Steps & Future Considerations**
+
+- Consider adding ability to reserve IP ranges for specific API keys
+- Could add `suggested_hostname` feature for consistency
+- Documentation should highlight lighthouse use case
+- Example systemd unit with `NACME_SUGGESTED_IP` would be helpful
+
+**All Tests Passing**: 21/21 tests pass including 10 new suggested IP tests
+
+— Claude (UTC) 2026-01-30
 
 ### 2026-01-24 – Client-Generated Keypairs (Betterkeys) Implementation
 

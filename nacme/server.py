@@ -192,6 +192,7 @@ class AddRequest(pydantic.BaseModel):
     api_key: str
     hostname_prefix: str | None = None
     public_key: str  # PEM string, required for client-generated keypair system
+    suggested_ip: str | None = None  # NEW: Optional IP suggestion
 
     @pydantic.field_validator("hostname_prefix")
     def sanitize_hostname_prefix(cls, v: str | None) -> str | None:
@@ -265,6 +266,20 @@ class AddRequest(pydantic.BaseModel):
 
         return v
 
+    @pydantic.field_validator("suggested_ip")
+    def validate_suggested_ip_format(cls, v: str | None) -> str | None:
+        """Validate that suggested_ip is a valid IP address format."""
+        if v is None:
+            return None
+
+        # Validate IP format
+        try:
+            ipaddress.ip_address(v)
+        except ValueError:
+            raise ValueError("suggested_ip must be a valid IP address")
+
+        return v
+
 
 class CertBundle(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(exclude_none=True)
@@ -285,6 +300,27 @@ def hash_key(key: str) -> str:
     # 3. Database access already implies compromise of the entire system
     # Future versions could add a server-side pepper from env vars for defense-in-depth.
     return hashlib.sha256(key.encode()).hexdigest()
+
+
+def validate_ip_in_subnet(ip_str: str, subnet_cidr: str) -> None:
+    """Validate that IP is in subnet and not network/broadcast address.
+
+    Raises ValueError with descriptive message if invalid.
+    """
+    ip = ipaddress.ip_address(ip_str)
+    net = ipaddress.ip_network(subnet_cidr)
+
+    # Check if in subnet
+    if ip not in net:
+        raise ValueError(f"IP {ip_str} is not in subnet {subnet_cidr}")
+
+    # Check if network address
+    if ip == net.network_address:
+        raise ValueError(f"IP {ip_str} is the network address and cannot be assigned")
+
+    # Check if broadcast address (IPv4 only)
+    if net.version == 4 and ip == net.broadcast_address:
+        raise ValueError(f"IP {ip_str} is the broadcast address and cannot be assigned")
 
 
 async def run_nebula_sign(
@@ -462,8 +498,42 @@ async def add_host(request: AddRequest):
 
         for retry_attempt in range(max_retries):
             try:
-                # Allocate IP
-                ip = await allocate_ip(conn)
+                # IP allocation with optional suggestion
+                if request.suggested_ip:
+                    try:
+                        # Validate IP is in subnet and not reserved
+                        validate_ip_in_subnet(request.suggested_ip, CONFIG.subnet_cidr)
+
+                        # Check if available in database
+                        cursor = await conn.execute(
+                            "SELECT COUNT(*) FROM hosts WHERE ip = ?",
+                            (request.suggested_ip,),
+                        )
+                        count_row = await cursor.fetchone()
+
+                        if count_row and count_row[0] == 0:
+                            # IP is available, use it
+                            ip = request.suggested_ip
+                            log.info("suggested_ip_accepted", ip=ip)
+                        else:
+                            # IP already taken, fall back to auto-allocation
+                            ip = await allocate_ip(conn)
+                            log.warning(
+                                "suggested_ip_taken_fallback",
+                                suggested=request.suggested_ip,
+                                allocated=ip,
+                            )
+                    except ValueError as e:
+                        # Invalid IP suggestion (out of subnet, network/broadcast addr)
+                        log.warning(
+                            "suggested_ip_invalid",
+                            ip=request.suggested_ip,
+                            error=str(e),
+                        )
+                        raise fastapi.HTTPException(422, f"Invalid suggested_ip: {e}")
+                else:
+                    # No suggestion, use auto-allocation
+                    ip = await allocate_ip(conn)
 
                 # Generate hostname
                 hostname = await generate_hostname(
