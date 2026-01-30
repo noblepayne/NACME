@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-01-29
+
 ### Added
 - Client can now suggest specific IP addresses via `--ip` flag or `NACME_SUGGESTED_IP` environment variable
 - Server validates suggested IPs are within configured subnet and not reserved addresses (network/broadcast)
@@ -16,13 +18,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Hostname prefix sanitization with charset enforcement and length limits
 - CA certificate caching at startup to reduce per-request I/O
 - Security documentation for API key hashing approach
+- Portable binary build system using Nuitka for cross-distro client binaries (~21MB bundles)
+- Alpine-based build container with musl libc for maximum portability
+- UPX compression and makeself bundling for self-contained distribution
+- Beads AI-native issue tracking system integration for better workflow management
+- requirements.txt for client builds
 
 ### Changed
-- **BREAKING**: Client-generated keys are now required (removed legacy compatibility claims)
+- **BREAKING**: Client-generated keys are now required - server no longer generates or returns private keys
 - Updated key type references from ED25519 to X25519 for accuracy
 - Database initialization now uses atomic transactions for safety
 - Public key validation moved to Pydantic model for cleaner error handling
 - CA certificate reads cached to avoid repeated disk access
+- Server now uses `nebula-cert sign -in-pub` for client-provided public keys
 
 ### Fixed
 - Transaction semantics in `init_db()` to prevent partial initialization
